@@ -4,7 +4,7 @@ This is an early version of an utility application that allowes you to build a t
 
 The application is developed mainly to create text corpora. This is not a tool for exporting your Telegram information. See [Why not just export?](#Why_not_just_export?).
 
-# Data Format
+## Data Format
 
 This version is capable of collection messages into large text corpora. A single corpus contains all messages in the corresponding chat. The messages are written in the following format:
 
@@ -19,7 +19,7 @@ This version is capable of collection messages into large text corpora. A single
 
 Each message is wrapped in "message tokens": `<|m|>` denotes the beginning of a message and `<|--m|>` denotes the end of a message. A start token immediately followed by "author token": `<|--me|>` denotes a start of a message written by you. "Change sender" token `<|cs|>` denotes the end of a block of message written by one user, which is particulary used in groups. Finally, `<|media|>` token is used to denote a message that contains something different from text (sticker, image and etc.).
 
-# Why not just export?
+## Why not just export?
 
 Telegram Desktop can export all the data in machine-readable format (JSON). However, this application provides you with the following functionality that does not 
 come with the desktop application:
@@ -29,11 +29,11 @@ come with the desktop application:
 
 But, the application cannot export media objects and other data. If you want to export your data, use [Export Tool](https://telegram.org/blog/export-and-more)
 
-# Building
+## Building
 
 To build an application and run on your desktop machine you can either build application locally (using CMake or any other tool), or build a Docker image.
 
-## Local
+### Local
 
 To build locally, you have to link [TDLib](https://github.com/tdlib/td) to the executable. Here is the example, how it can be done using CMake
 
@@ -54,7 +54,7 @@ It will take awhile to build the library together with the application. After it
 
 ```
 
-## Docker
+### Docker
 
 To build an application with Docker run:
 
