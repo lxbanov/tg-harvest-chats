@@ -1,0 +1,6 @@
+cmake_minimum_required(VERSION 3.4 FATAL_ERROR)
+project(AutoTelegram VERSION 1.0 LANGUAGES CXX)
+add_subdirectory(lib/td)
+add_executable(tx_harvestchats tx_harvestchats.cpp)
+target_link_libraries(tx_harvestchats PRIVATE Td::TdStatic)
+set_property(TARGET tx_harvestchats PROPERTY CXX_STANDARD 17)
