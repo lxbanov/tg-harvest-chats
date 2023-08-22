@@ -97,8 +97,8 @@ namespace creds {
     auto database_directory_ = "tdlib";
     auto use_message_database_ = true;
     auto use_secret_chats_ = true;
-    auto api_id_ = 0;   // Put your API ID here
-    auto api_hash_ = "";    // Put your API Hash here
+    auto api_id_ = 26062503;   // Put your API ID here
+    auto api_hash_ = "fde88ddfcb2c5b2d21e1ec5dc03ee570";    // Put your API Hash here
     auto system_language_code_ = "en";
     auto device_model_ = "Desktop";
     auto application_version_ = "1.0";

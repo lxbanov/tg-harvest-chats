@@ -21,3 +21,5 @@ RUN cd /app/build && make
 
 
 FROM build as app
+RUN mkdir /output
+RUN cd /output
