@@ -1,4 +1,3 @@
-
 FROM ubuntu as system_setup
 
 ARG DEBIAN_FRONTEND=noninteractive

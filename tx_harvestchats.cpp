@@ -21,6 +21,7 @@ Author: Aleksandr Lobanov <dev@alobanov.space>
 #include <string.h>
 #include <iostream>
 #include <set>
+#include <algorithm>
 #include <limits>
 #include <thread>
 #include <mutex>
@@ -97,11 +98,11 @@ namespace creds {
     auto database_directory_ = "tdlib";
     auto use_message_database_ = true;
     auto use_secret_chats_ = true;
-    auto api_id_ = 26062503;   // Put your API ID here
-    auto api_hash_ = "fde88ddfcb2c5b2d21e1ec5dc03ee570";    // Put your API Hash here
+    auto api_id_ = 0;   // Put your API ID here
+    auto api_hash_ = "";    // Put your API Hash here
     auto system_language_code_ = "en";
     auto device_model_ = "Desktop";
-    auto application_version_ = "1.0";
+    auto application_version_ = "1.0.1";
     auto enable_storage_optimizer_ = true;
 }
 
@@ -228,6 +229,13 @@ class AutoMessageBuffer {
 
 
 class TelegramHarvestChats {
+public:
+    enum Mode {
+        GET_ALL,
+        GET_ONE,
+    };
+
+private:
     using Handler = std::function<void(AnyObjectPtr&, std::int64_t)>;
     using RequestFactory = std::function<ObjectPtr<td_api::Function>(void)>;
 
@@ -252,6 +260,15 @@ class TelegramHarvestChats {
     std::int64_t
     query_id_ { 1LL };
 
+    std::int64_t 
+    p_chat_id_ { 0LL };
+
+    Mode 
+    mode_ { GET_ALL };
+
+    bool 
+    only_people_ { false };
+
     std::map<std::int64_t, std::pair<RequestFactory, Handler>>
     callbacks_;
 
@@ -264,10 +281,21 @@ class TelegramHarvestChats {
 
 
     void progress_update_() {
-        std::cout << "\r" << std::flush;
-        // std::cout << "[.. ] " << this->current_chat_messages_count_ << " messages received. Chat -- " << this->chat_ids_.back() << "\r" << std::flush;
-        std::cout << "[... ] " << this->chat_ids_.back() << " " << this->current_chat_messages_count_ << " messages received\r" << std::flush;
+        tx::sprintln("[.. ] ", this->chat_ids_.back(), " ", this->current_chat_messages_count_);
     }
+
+
+    Handler print_err_and_exit_handler_() {
+        return  
+        [this](AnyObjectPtr& _o, auto) {
+            if (_o->get_id() == td_api::error::ID) {
+                auto err = td::move_tl_object_as<td_api::error>(_o);
+                std::cerr << tx::println("[ERR ] ", err->code_, " ", err->message_) << std::flush;
+                this->is_running_ = false;
+            }
+        };
+    }
+
 
     void send_request_with_handler_(RequestFactory f, Handler h) {
         auto query_id = this->query_id_++;
@@ -291,7 +319,7 @@ class TelegramHarvestChats {
 
 
     void on_all_chat_messages_received_(std::int64_t chat_id) {
-        tx::sprintln("[OK ] Chat: ", chat_id, "--\t\t total:", current_chat_messages_count_);
+        tx::sprintln("[OK ] Chat: ", chat_id, "  total:", current_chat_messages_count_);
         this->chat_ids_.pop_back();
         this->current_chat_messages_count_ = 0;
         this->last_received_message_ = 0;
@@ -356,24 +384,54 @@ class TelegramHarvestChats {
 
 
     void on_chats_received_(ObjectPtr<td_api::chats>& chats) {
-        std::sort(
-            this->chat_ids_.begin(),
-            this->chat_ids_.end(),
-            [](auto& a, auto& b) { return a < b; }
-        );
+        switch(this->mode_) {
+            case GET_ALL: {      
+                std::sort(
+                    this->chat_ids_.begin(),
+                    this->chat_ids_.end(),
+                    [](auto& a, auto& b) { return a < b; }
+                );
 
+                auto last = std::unique(
+                    this->chat_ids_.begin(),
+                    this->chat_ids_.end()
+                );
 
-        auto last = std::unique(
-            this->chat_ids_.begin(),
-            this->chat_ids_.end()
-        );
+                this->chat_ids_.erase(last, this->chat_ids_.end());
+                
+                // If only people are needed
+                // chat ids should be only positive
+                if (this->only_people_) {
+                    this->chat_ids_.erase(
+                        std::remove_if(
+                            this->chat_ids_.begin(),
+                            this->chat_ids_.end(),
+                            [](auto& a) { return a < 0; }
+                        ),
+                        this->chat_ids_.end()
+                    );
+                }
 
-        this->chat_ids_.erase(last, this->chat_ids_.end());
+                break;
+            }
+            case GET_ONE: {
+                this->chat_ids_.clear();
+                if (this->p_chat_id_ == 0) {
+                    tx::sprintln("[ERR] Chat ID is not set");
+                    this->is_running_ = false;
+                    return;
+                }
+                this->chat_ids_.push_back(this->p_chat_id_);
+                break;
+            }
+        }
+
 
         tx::sprintln("[OK ] Total chats: ", this->chat_ids_.size());
         tx::sprintln("[.. ] Retrieving messages");
         fs::remove_all(OUTPUT_DIR_NAME);
         fs::create_directory(OUTPUT_DIR_NAME);
+
         this->current_buffer_ = AutoMessageBuffer{ 
             PER_CHAT_BUFFER_SIZE,
             std::ofstream(fs::path(OUTPUT_DIR_NAME) / fs::path(std::to_string(this->chat_ids_.back()))),
@@ -392,33 +450,36 @@ class TelegramHarvestChats {
         td_api::downcast_call(*update.authorization_state_, overload(
             [this](auto&){},
             [this](td_api::authorizationStateWaitPhoneNumber&) {
-                std::cout << "Phone: " << std::flush;
+                std::cout << "[>  ] Phone: " << std::flush;
                 std::string phone;
                 std::cin >> phone;
-                this->send_request_(
+                this->send_request_with_handler_(
                     [phone](){ 
                         return td_api::make_object<td_api::setAuthenticationPhoneNumber>(phone, nullptr); 
-                    }
+                    },
+                    print_err_and_exit_handler_()
                 );
             },
             [this](td_api::authorizationStateWaitCode&) {
-                std::cout << "Enter authentication code: " << std::flush;
+                std::cout << "[>  ] Enter authentication code: " << std::flush;
                 std::string code;
                 std::cin >> code;
-                this->send_request_(
+                this->send_request_with_handler_(
                     [code]() { 
                         return td_api::make_object<td_api::checkAuthenticationCode>(code);
-                    }
+                    },
+                    print_err_and_exit_handler_()
                 );
             },
             [this](td_api::authorizationStateWaitPassword &) {
-                std::cout << "Enter authentication password: " << std::flush;
+                std::cout << "[>  ] Enter authentication password: " << std::flush;
                 std::string password;
                 std::cin >> password;
-                    this->send_request_(
+                    this->send_request_with_handler_(
                     [password]() { 
                         return td_api::make_object<td_api::checkAuthenticationPassword>(password);
-                    }
+                    },
+                    print_err_and_exit_handler_()
                 );
             },
             [this](td_api::authorizationStateWaitTdlibParameters &) {
@@ -509,13 +570,30 @@ class TelegramHarvestChats {
     void init_tg_() {
         td::ClientManager::execute(td_api::make_object<td_api::setLogVerbosityLevel>(0));
         this->client_id_ = this->manager_->create_client_id();
-        this->send_request_(
-            [](){ return td_api::make_object<td_api::getOption>("version"); }
+        this->send_request_with_handler_(
+            [](){ return td_api::make_object<td_api::getOption>("version"); },
+            [this](AnyObjectPtr& _o, auto) {  
+                if (_o.get() == nullptr) {
+                    tx::sprintln("[FATAL ] Could not connect to Telegram. Please check your Internet connection");
+                    this->is_running_ = false;
+                    return;
+                }
+                else if (_o->get_id() == td_api::error::ID) {
+                    tx::sprintln("[FATAL ]  Error while connecting. Error:");
+                    auto err = td::move_tl_object_as<td_api::error>(_o);
+                    tx::sprintln("\t", err->code_, " ", err->message_);
+                    this->is_running_ = false;
+                    return;
+                } else {
+                    tx::sprintln("[OK ] Connected to Telegram");
+                }
+            }
+
         );
         this->is_initialized_ = true;
     }
 
-public:
+public: 
     void listen() {
         if (!this->is_initialized_) {
             this->init_tg_();
@@ -528,6 +606,22 @@ public:
                 this->on_response_(std::move(response));
         }
     }
+
+
+    void set_chat_id(const std::int64_t& _cid) {
+        this->p_chat_id_ = _cid;
+    }
+
+
+    void set_mode(const Mode& _mode) {
+        this->mode_ = _mode;
+    }
+
+
+    void set_only_people(const bool& _only_people) {
+        this->only_people_ = _only_people;
+    }
+    
 }; // class TelegramHarvestChats;
 
 
@@ -563,6 +657,8 @@ int main(int argc, char* argv[]) {
         tx::sprintln("\t--MESSAGES_PER_REQUEST\t\tNumber of messages to retrieve per request. Default: 100");
         tx::sprintln("\t--PER_CHAT_BUFFER_SIZE\t\tSize of the buffer for each chat. Default: 33554432");
         tx::sprintln("\t--REVERSE_CHAT_ORDER\t\tReverse the order of messages in each chat. Default: true");
+        tx::sprintln("\t--chat [CHAT_ID]\t\t\tHarvest a single chat with the specified ID");
+        tx::sprintln("\t--only-people\t\t\tHarvest only chats with people");
         return 0;
     }
 
@@ -686,20 +782,45 @@ int main(int argc, char* argv[]) {
     }
 
 
-    tx::sprintln("\n\n Running with the following parameters:\t");
-    tx::sprintln("\tTOKEN_CHANGE_SENDER:\t", TOKEN_CHANGE_SENDER);
-    tx::sprintln("\tTOKEN_MEDIA:\t", TOKEN_MEDIA);
-    tx::sprintln("\tTOKEN_AUTHOR:\t", TOKEN_AUTHOR);
-    tx::sprintln("\tTOKEN_MESSAGE_BEGIN:\t", TOKEN_MESSAGE_BEGIN);
-    tx::sprintln("\tTOKEN_MESSAGE_END:\t", TOKEN_MESSAGE_END);
-    tx::sprintln("\tOUTPUT_DIR_NAME:\t", OUTPUT_DIR_NAME);
-    tx::sprintln("\tMESSAGES_PER_REQUEST:\t", MESSAGES_PER_REQUEST);
-    tx::sprintln("\tPER_CHAT_BUFFER_SIZE:\t", PER_CHAT_BUFFER_SIZE);
-    tx::sprintln("\tREVERSE_CHAT_ORDER:\t", REVERSE_CHAT_ORDER);
+    tx::sprintln("\n\n Running with the following parameters:");
+    tx::sprintln("\tTOKEN_CHANGE_SENDER:\t\t", TOKEN_CHANGE_SENDER);
+    tx::sprintln("\tTOKEN_MEDIA:\t\t\t", TOKEN_MEDIA);
+    tx::sprintln("\tTOKEN_AUTHOR:\t\t\t", TOKEN_AUTHOR);
+    tx::sprintln("\tTOKEN_MESSAGE_BEGIN:\t\t", TOKEN_MESSAGE_BEGIN);
+    tx::sprintln("\tTOKEN_MESSAGE_END:\t\t", TOKEN_MESSAGE_END);
+    tx::sprintln("\tOUTPUT_DIR_NAME:\t\t", OUTPUT_DIR_NAME);
+    tx::sprintln("\tMESSAGES_PER_REQUEST:\t\t", MESSAGES_PER_REQUEST);
+    tx::sprintln("\tPER_CHAT_BUFFER_SIZE:\t\t", PER_CHAT_BUFFER_SIZE);
+    tx::sprintln("\tREVERSE_CHAT_ORDER:\t\t", REVERSE_CHAT_ORDER);
+    if (hasarg(argv, "--chat")) tx::sprintln("\tCHAT_ID:\t\t\t", getarg(argv, "--chat"));
+    if (hasarg(argv, "--only-people")) tx::sprintln("\tONLY_PEOPLE:\t\t\t", "true");
+    else tx::sprintln("\tONLY_PEOPLE:\t\t\t", "false");
     tx::sprintln("\n\n");
 
 
     auto app = TelegramHarvestChats();
+
+    if (hasarg(argv, "--chat")) {
+        auto __arg = getarg(argv, "--chat");
+        if (__arg != nullptr) {
+            try {
+                app.set_chat_id(std::stoll(__arg));
+                app.set_mode(TelegramHarvestChats::GET_ONE);
+            } catch (...) {
+                tx::sprintln("Error: --chat requires an integer argument");
+                return 1;
+            }
+            
+        } else {
+            tx::sprintln("Error: --chat requires an argument");
+            return 1;
+        }
+    }
+
+    if (hasarg(argv, "--only-people")) {
+        app.set_only_people(true);
+    }
+
     app.listen();
 
     return 0;
