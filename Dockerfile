@@ -21,5 +21,6 @@ RUN cd /app/build && make
 
 
 FROM build as app
-RUN mkdir /output
-RUN cd /output
+WORKDIR /output
+RUN ln -s /app/build/tx_harvestchats /output/run
+RUN chmod +x /output/run
